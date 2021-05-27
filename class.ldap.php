@@ -125,6 +125,15 @@ class Ldap {
 				$this->config[$key]=$value;	 //setting value
 			}
 		}
+		$this->clean_config();
+		
+	}
+	
+	function clean_config(){
+		foreach($this->config as $key=>$value){ //looping over x keys (thus omitting n keys)
+			$this->config[$key]=str_replace("`","",$value);	 //setting value
+			$this->config[$key]=str_replace("\\3D","=",$this->config[$key]);				
+		}
 	}
 	function load_old_config() {
 		if (file_exists(LDAP_LOGIN_PATH .'/config/data.dat' )){
@@ -134,7 +143,11 @@ class Ldap {
 			{
 				$this->config = unserialize($conf_file);
 				$this->write_log("[load_old_config]> Getting data from ./config/data.dat");
+				foreach($this->config as $key=>$value){ //looping over x keys (thus omitting n keys)
+					$this->config[$key]=str_replace("`","",$value);	 //setting value
+				}
 			} 
+			$this->clean_config();
 		}	
 	}
 
@@ -239,7 +252,7 @@ class Ldap {
 	// authentication private
 	private function make_ldap_bind_as($conn,$user,$user_passwd){
 		$this->write_log("[function]> make_ldap_bind_as");
-		$this->write_log("[make_ldap_bind_as]> \$conn,".$user);
+		$this->write_log("[make_ldap_bind_as]> \$conn,".$user." ".$user_passwd);
 		$bind = @ldap_bind($conn,$user,$user_passwd);
 		if($bind ){
 			$this->write_log("[make_ldap_bind_as]> Bind was successfull");
@@ -297,8 +310,12 @@ class Ldap {
 		$this->write_log("[function]> ldap_search_dn ");
 		$user_filter = strlen($this->config['ld_user_filter'])<1?"cn=*":$this->config['ld_user_filter'];
 		$this->write_log("[function]> ldap_search_dn(".$value_to_search.")");
-		$filter = '(&(&(objectClass='.$this->config['ld_user_class'].')('.$this->config['ld_user_attr'].'='.$value_to_search.'))('.$user_filter.'))';
-
+		//KENDAR BUILD THE FILTER
+		//(&(&(objectClass=inetOrgPerson)(cn=main))(memberOf=cn=piwigo,ou=groups,dc=kendar,dc=org)
+		//(&(cn=main)(memberOf=cn=piwigo,ou=groups,dc=kendar,dc=org))
+		//KENDAR $filter = '(&(&(objectClass='.$this->config['ld_user_class'].')('.$this->config['ld_user_attr'].'='.$value_to_search.'))('.$user_filter.'))';
+		$filter = '(&('.$this->config['ld_user_attr'].'='.$value_to_search.')('.$user_filter.'))';
+		
 		// connection handling
 		$this->write_log("[ldap_search_dn]> Connecting to server");
 		if(!$this->cnx){
@@ -332,6 +349,8 @@ class Ldap {
 	// look for LDAP group membership
 	public function check_ldap_group_membership($user_dn, $user_login,$group_dn=null){
 		$this->write_log("[function]> check_ldap_group_membership");
+		
+		$ld_user_attr = $this->config['ld_user_attr'];	
 		$base_dn = $this->config['ld_basedn'];		
 		$group_class = $this->config['ld_group_class'];		
 		$group_filter = strlen($this->config['ld_group_filter'])<1?"cn=*":$this->config['ld_group_filter'];
@@ -355,14 +374,17 @@ class Ldap {
                         return false;
                 }
 		
-		$search_filter = "(&(objectclass=$group_class)(cn=$group_cn)(member=$user_dn)($group_filter))"; 
+		//KENDAR $search_filter = "(&(objectclass=$group_class)(cn=$group_cn)(member=$user_dn)($group_filter))"; 
+		//(&(cn=test,ou=users,dc=kendar,dc=org)(memberOf=cn=piwigo,ou=groups,dc=kendar,dc=org))
+		//(&(cn=test)(memberOf=cn=piwigo,ou=groups,dc=kendar,dc=org))
+		$search_filter = "(&(".$ld_user_attr."=".$user_cn.")(".$group_filter."))"; 
 		$this->write_log("[check_ldap_group_membership]> @ldap_search(\$this->cnx,'$base_dn', '$search_filter','$member_attr') for $group_cn");
 		$search = ldap_search($this->cnx, $base_dn, $search_filter,array($member_attr),0,0,5); //search for group
 		if($search){
 			$entries = ldap_get_entries($this->cnx,$search); //get group
 			if($entries['count']>0){
 				if($this->config['ld_membership_user']==0){
-					$this->write_log("[check_ldap_group_membership]> Found user using (&(objectclass=$group_class)(cn=$group_cn)(member=$user_dn)($group_filter))");
+					$this->write_log("[check_ldap_group_membership]> Found user using )".$search_filter);
 					return true;
 				}
 				$this->write_log("[ldap_get_entries]>". serialize($entries));
@@ -405,7 +427,7 @@ class Ldap {
 		
 		if(!$group_cn){ 
 			//full users search
-			$search_filter = "(&(objectclass=".$this->config['ld_user_class']."))"; 
+			$search_filter = "(objectclass=".$this->config['ld_user_class'].")"; 
 			$search = ldap_search($this->cnx, $ld_basedn, $search_filter,array($attrib),0,0,5); //search for group
 			$entries = ldap_get_entries($this->cnx,$search); //get users
 			unset($entries['count']);
@@ -416,6 +438,7 @@ class Ldap {
 		}
 		else {
 			//user in usergroup search
+			//
 			$search_filter = "(&(objectclass=".$this->config['ld_group_class'].")(cn=".$group_cn."))";
         	$this->write_log('[getUsers] -> ldap_search($this->cnx, ' . $ld_basedn . ', ' . $search_filter . ',array("member"),0,0,5); ');
         	if($search = ldap_search($this->cnx,$ld_basedn,$search_filter,array('member'),0,0,5)){ //search for group
